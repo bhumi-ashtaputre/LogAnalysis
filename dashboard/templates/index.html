@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Log Analytics Dashboard</title>
+<style>
+* { box-sizing: border-box; }
+body {
+    margin: 0;
+    font-family: Arial, Helvetica, sans-serif;
+    background: #f4f6f8;
+    color: #1f2937;
+}
+header {
+    background: #111827;
+    color: white;
+    padding: 24px 5%;
+}
+header h1 { margin: 0 0 6px; font-size: 28px; }
+header p { margin: 0; color: #cbd5e1; }
+.container { width: 90%; max-width: 1200px; margin: 28px auto; }
+.grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 16px;
+}
+.card {
+    background: white;
+    border-radius: 12px;
+    padding: 20px;
+    box-shadow: 0 3px 12px rgba(0,0,0,.07);
+}
+.card .label { color: #64748b; font-size: 13px; }
+.card .value { font-size: 26px; font-weight: 700; margin-top: 8px; }
+.section { margin-top: 22px; }
+.section h2 { font-size: 20px; }
+table {
+    width: 100%;
+    border-collapse: collapse;
+    background: white;
+    border-radius: 12px;
+    overflow: hidden;
+}
+th, td {
+    padding: 12px 14px;
+    border-bottom: 1px solid #e5e7eb;
+    text-align: left;
+}
+th { background: #f8fafc; }
+.anomaly {
+    background: white;
+    border-left: 4px solid #dc2626;
+    padding: 12px 16px;
+    margin: 8px 0;
+    border-radius: 6px;
+}
+.compare {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+}
+.small { color: #64748b; font-size: 13px; }
+@media(max-width:800px) {
+    .grid, .compare { grid-template-columns: 1fr 1fr; }
+}
+@media(max-width:520px) {
+    .grid, .compare { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<header>
+    <h1>Server Log Analytics</h1>
+    <p>Sequential, OpenMP and MPI + OpenMP performance and analysis results</p>
+</header>
+
+<div class="container">
+    <div class="grid">
+        <div class="card">
+            <div class="label">Total Requests</div>
+            <div class="value">{{ result.get("total_requests", 0) }}</div>
+        </div>
+        <div class="card">
+            <div class="label">Successful</div>
+            <div class="value">{{ result.get("successful_requests", 0) }}</div>
+        </div>
+        <div class="card">
+            <div class="label">Failed</div>
+            <div class="value">{{ result.get("failed_requests", 0) }}</div>
+        </div>
+        <div class="card">
+            <div class="label">Average Response</div>
+            <div class="value">{{ "%.2f"|format(result.get("average_response_ms", 0)) }} ms</div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>Execution comparison</h2>
+        <div class="compare">
+            <div class="card">
+                <div class="label">Sequential</div>
+                <div class="value">{{ "%.2f"|format(result.get("elapsed_ms", 0)) }} ms</div>
+            </div>
+            <div class="card">
+                <div class="label">OpenMP</div>
+                <div class="value">{{ "%.2f"|format(omp.get("elapsed_ms", 0)) }} ms</div>
+            </div>
+            <div class="card">
+                <div class="label">MPI + OpenMP</div>
+                <div class="value">{{ "%.2f"|format(hybrid.get("elapsed_ms", 0)) }} ms</div>
+            </div>
+        </div>
+        <p class="small">Run the benchmark script for a proper multi-size performance study.</p>
+    </div>
+
+    <div class="section">
+        <h2>Top URLs</h2>
+        <table>
+            <tr><th>URL</th><th>Requests</th><th>Average Response</th></tr>
+            {% for x in result.get("top_urls", []) %}
+            <tr>
+                <td>{{ x.url }}</td>
+                <td>{{ x.requests }}</td>
+                <td>{{ "%.2f"|format(x.avg_response_ms) }} ms</td>
+            </tr>
+            {% endfor %}
+        </table>
+    </div>
+
+    <div class="section">
+        <h2>Top IPs</h2>
+        <table>
+            <tr><th>IP</th><th>Requests</th></tr>
+            {% for x in result.get("top_ips", []) %}
+            <tr><td>{{ x.ip }}</td><td>{{ x.requests }}</td></tr>
+            {% endfor %}
+        </table>
+    </div>
+
+    <div class="section">
+        <h2>Anomalies / suspicious activity</h2>
+        {% for x in result.get("anomalies", []) %}
+            <div class="anomaly">{{ x }}</div>
+        {% else %}
+            <div class="card">No anomalies were reported by the current deterministic rules.</div>
+        {% endfor %}
+    </div>
+</div>
+</body>
+</html>
