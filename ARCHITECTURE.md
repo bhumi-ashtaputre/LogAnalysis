@@ -1,49 +1,63 @@
 # Architecture
 
-## Core pipeline
+## Processing pipeline
 
 ```text
-CSV Log
-  |
-  v
-Parsing
-  |
-  +---------------------------+
-  |                           |
-  v                           v
-Statistics                Anomaly rules
-  |                           |
-  +-------------+-------------+
-                |
-                v
-             JSON
-                |
-                v
-           Dashboard
+CSV server logs
+      |
+      v
+  CSV parser
+      |
+      v
+vector<LogRecord>
+      |
+      +---------------------------+
+      |                           |
+      v                           v
+Sequential analysis        OpenMP parallel analysis
+      |                           |
+      |                     local AnalysisResult
+      |                           |
+      |                      merge local results
+      +-------------+-------------+
+                    |
+                    v
+             anomaly detection
+                    |
+                    v
+                JSON result
+                    |
+                    v
+             dashboard/app.py
+                    |
+                    v
+       graphs + tables + interpretation
 ```
 
-## Parallel designs
+## OpenMP design
 
-### Sequential
+The computationally intensive record aggregation is split into contiguous ranges. Each OpenMP thread owns a separate `AnalysisResult` object.
 
-One execution flow processes every valid record.
+This avoids a shared update such as:
 
-### OpenMP
+```text
+shared_counter++
+```
 
-The record array is divided into contiguous ranges. Each OpenMP thread writes into its own `AnalysisResult`. Results are merged after the parallel region.
+inside the main loop, which would require synchronization and could create a race condition.
 
-This avoids a shared lock for every record.
+After the parallel region, the program merges the per-thread maps and counters.
 
-### Naive OpenMP
+## Dashboard design
 
-All threads update one shared result inside a critical section. This is intentionally inefficient and exists to demonstrate lock contention.
+`dashboard/app.py` is intentionally self-contained. It:
 
-### MPI + OpenMP
+- reads `results/sequential.json`
+- reads `results/openmp.json`
+- reads `results/benchmark.csv`
+- calculates/reads speedup and efficiency values
+- renders SVG graphs directly in HTML
+- renders experimental tables
+- explains how to interpret speedup and efficiency
 
-MPI divides the record range between processes. Each process then divides its own range between OpenMP threads. Each process produces a partial result and sends it to rank 0. Rank 0 merges the partial results and writes the final JSON.
-
-## Important implementation note
-
-For clarity and portability, the hybrid implementation currently has every MPI process read the CSV file independently, then analyze a disjoint range. This demonstrates process-level and thread-level parallelism without introducing MPI-IO complexity.
-
-For a production-scale implementation, the next optimization would be distributed file I/O / MPI-IO or a byte-range partitioning strategy so that each process reads only its assigned part of the file.
+No separate graph-generation server is needed.

@@ -1,24 +1,12 @@
 #include "common.hpp"
 
 #include <omp.h>
+
 #include <chrono>
 #include <fstream>
 #include <iostream>
+#include <stdexcept>
 #include <vector>
-
-static std::vector<LogRecord> load_records(const std::string& path) {
-    std::ifstream file(path);
-    std::vector<LogRecord> records;
-    if (!file) throw std::runtime_error("Cannot open input file: " + path);
-
-    std::string line;
-    while (std::getline(file, line)) {
-        LogRecord r;
-        if (parse_line(line, r))
-            records.push_back(std::move(r));
-    }
-    return records;
-}
 
 int main(int argc, char** argv) {
     if (argc != 3) {
@@ -27,46 +15,48 @@ int main(int argc, char** argv) {
     }
 
     try {
-        auto start = std::chrono::steady_clock::now();
-        auto records = load_records(argv[1]);
+        const auto start = std::chrono::steady_clock::now();
+        const auto records = load_records(argv[1]);
 
-        int threads = omp_get_max_threads();
-        std::vector<AnalysisResult> local(threads);
+        omp_set_dynamic(0);
+        const int threads = omp_get_max_threads();
+        std::vector<AnalysisResult> local(static_cast<std::size_t>(threads));
+        const auto analysis_start = std::chrono::steady_clock::now();
 
         #pragma omp parallel
         {
-            int tid = omp_get_thread_num();
-            int nt = omp_get_num_threads();
+            const int tid = omp_get_thread_num();
+            const int actual_threads = omp_get_num_threads();
+            const std::size_t begin =
+                records.size() * static_cast<std::size_t>(tid) /
+                static_cast<std::size_t>(actual_threads);
+            const std::size_t end =
+                records.size() * static_cast<std::size_t>(tid + 1) /
+                static_cast<std::size_t>(actual_threads);
 
-            size_t begin = records.size() * static_cast<size_t>(tid) /
-                           static_cast<size_t>(nt);
-            size_t end = records.size() * static_cast<size_t>(tid + 1) /
-                         static_cast<size_t>(nt);
-
-            local[tid] = analyze_range(records, begin, end);
+            local[static_cast<std::size_t>(tid)] =
+                analyze_range(records, begin, end);
         }
 
         AnalysisResult result;
-        for (const auto& r : local)
-            merge_result(result, r);
-
-        sort_and_trim(result);
+        for (const auto& partial : local) merge_result(result, partial);
+        const auto analysis_stop = std::chrono::steady_clock::now();
+        const double analysis_ms = std::chrono::duration<double, std::milli>(analysis_stop - analysis_start).count();
         detect_anomalies(records, result);
 
-        auto stop = std::chrono::steady_clock::now();
-        double ms = std::chrono::duration<double, std::milli>(stop - start).count();
+        const auto stop = std::chrono::steady_clock::now();
+        const double elapsed_ms = std::chrono::duration<double, std::milli>(stop - start).count();
 
-        std::ofstream out(argv[2]);
-        if (!out) throw std::runtime_error("Cannot write output: " + std::string(argv[2]));
-        out << result_to_json(result, ms);
+        std::ofstream output(argv[2]);
+        if (!output) throw std::runtime_error("Cannot write output file: " + std::string(argv[2]));
+        output << result_to_json(result, elapsed_ms, analysis_ms, threads);
 
-        std::cout << "OpenMP: " << records.size()
-                  << " valid records, " << threads
-                  << " max threads, " << ms << " ms\n";
+        std::cout << "OpenMP | records=" << records.size()
+                  << " | threads=" << threads
+                  << " | time=" << elapsed_ms << " ms\n";
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << "\n";
         return 1;
     }
-
     return 0;
 }

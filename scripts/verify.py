@@ -1,78 +1,53 @@
 #!/usr/bin/env python3
+"""Verify that sequential and OpenMP produce the same analytical result."""
+
+import argparse
 import json
 import os
 import subprocess
-import sys
-import tempfile
+from pathlib import Path
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BIN = os.path.join(ROOT, "bin")
+ROOT = Path(__file__).resolve().parents[1]
 
-def run(cmd):
-    result = subprocess.run(cmd, cwd=ROOT, text=True, capture_output=True)
-    if result.returncode != 0:
-        print(result.stdout)
-        print(result.stderr, file=sys.stderr)
-        raise RuntimeError("Command failed: " + " ".join(cmd))
-    return result
 
-def normalized(path):
-    with open(path, encoding="utf-8") as f:
-        d = json.load(f)
+def normalized(path: Path) -> dict:
+    with path.open(encoding="utf-8") as f:
+        data = json.load(f)
+    data.pop("elapsed_ms", None)
+    data.pop("analysis_ms", None)
+    data.pop("threads", None)
+    return data
 
-    # Runtime is expected to differ, so remove it.
-    d.pop("elapsed_ms", None)
-    return d
 
-def verify_dataset(dataset):
-    with tempfile.TemporaryDirectory() as td:
-        seq = os.path.join(td, "seq.json")
-        omp = os.path.join(td, "omp.json")
-        hyb = os.path.join(td, "hyb.json")
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("input_csv")
+    args = parser.parse_args()
 
-        run([os.path.join(BIN, "sequential"), dataset, seq])
-        run([os.path.join(BIN, "openmp"), dataset, omp])
+    input_path = Path(args.input_csv)
+    if not input_path.is_absolute():
+        input_path = (ROOT / input_path).resolve()
 
-        # Two processes, two threads/process. On machines with one CPU,
-        # change this to -np 1 and OMP_NUM_THREADS=1.
-        env = os.environ.copy()
-        env["OMP_NUM_THREADS"] = "2"
-        result = subprocess.run(
-            ["mpirun", "--oversubscribe", "-np", "2",
-             os.path.join(BIN, "hybrid"), dataset, hyb],
-            cwd=ROOT, env=env, text=True, capture_output=True
-        )
-        if result.returncode != 0:
-            print(result.stdout)
-            print(result.stderr, file=sys.stderr)
-            raise RuntimeError("MPI verification failed")
+    seq_output = ROOT / "results" / "verify_sequential.json"
+    omp_output = ROOT / "results" / "verify_openmp.json"
 
-        a = normalized(seq)
-        b = normalized(omp)
-        c = normalized(hyb)
+    subprocess.run([
+        str(ROOT / "bin" / "sequential"), str(input_path), str(seq_output)
+    ], check=True, cwd=ROOT)
 
-        if a != b:
-            print("FAIL: Sequential != OpenMP")
-            return False
-        if a != c:
-            print("FAIL: Sequential != MPI+OpenMP")
-            return False
+    env = os.environ.copy()
+    env["OMP_NUM_THREADS"] = "4"
+    subprocess.run([
+        str(ROOT / "bin" / "openmp"), str(input_path), str(omp_output)
+    ], check=True, cwd=ROOT, env=env)
 
-        print(f"PASS: all implementations agree for {os.path.basename(dataset)}")
-        return True
-
-def main():
-    if len(sys.argv) != 2:
-        print("Usage: python3 scripts/verify.py data/log.csv")
+    if normalized(seq_output) != normalized(omp_output):
+        print("VERIFICATION FAILED: sequential and OpenMP results differ.")
         return 1
 
-    dataset = os.path.abspath(sys.argv[1])
-    if not os.path.exists(dataset):
-        print("Dataset does not exist:", dataset)
-        return 1
+    print("VERIFICATION PASSED: sequential and OpenMP results are identical.")
+    return 0
 
-    ok = verify_dataset(dataset)
-    return 0 if ok else 1
 
 if __name__ == "__main__":
     raise SystemExit(main())

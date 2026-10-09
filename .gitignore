@@ -1,9 +1,7 @@
 bin/
+results/*.json
+results/*.csv
+data/log_*.csv
+data/smoke.csv
 __pycache__/
 *.pyc
-results/*.json
-results/benchmark.csv
-results/plots/
-data/*.csv
-.venv/
-venv/

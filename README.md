@@ -1,45 +1,199 @@
-# Parallel Server Log Analysis
+# Server Log Analytics: Sequential vs OpenMP
 
-A parallel programming project for processing large server/application logs and identifying patterns and anomalies.
+## 1. Project overview
 
-## What this project demonstrates
+This project processes application/server logs and identifies useful patterns, events, and anomalies. The same analysis is implemented in two ways:
 
-Three implementations are provided:
+1. **Sequential C++** — single-threaded baseline.
+2. **OpenMP C++** — parallel CPU implementation using multiple threads.
 
-1. **Sequential** C++ baseline
-2. **OpenMP** shared-memory parallel implementation
-3. **MPI + OpenMP** hybrid implementation
+The project verifies that both implementations produce the same analytical result and evaluates their performance for increasing log volumes and different OpenMP thread counts.
 
-The implementations perform the same deterministic analysis and should produce the same logical report.
+The browser dashboard is implemented entirely in `dashboard/app.py`. It reads the experimental CSV/JSON results and creates all required graphs and tables directly from that file.
 
-### Analysis performed
+## 2. Input format
 
-- Total requests
-- Successful / failed requests
-- HTTP status-code counts
-- Average response time
-- Slowest URL by average response time
-- Most-requested URL
-- Most-active IP
-- Error-burst anomalies (5+ consecutive 5xx responses)
-- Traffic-spike detection using fixed record/time-density windows
-- Brute-force login candidates (5+ HTTP 401 responses to /login from one IP)
-- High-volume IP detection
-- Slow URL detection
-- Top suspicious IPs
+Each CSV record is:
 
-### Extra features
+```text
+Timestamp,IP,URL,HTTP_Status,Response_Time_ms
+```
 
-- Automated correctness verification
-- Empty/small/edge-case datasets
-- Naive OpenMP implementation to demonstrate synchronization overhead
-- JSON output
-- Browser dashboard
-- Benchmarking for increasing dataset sizes
-- Speedup calculation
-- Plot generation
+Example:
 
-## Project structure
+```text
+2026-01-01 00:00:01,192.168.1.14,/login,200,143.20
+```
+
+## 3. Log analysis performed
+
+For every log record the program calculates:
+
+- total requests
+- successful requests
+- failed requests
+- HTTP status counts
+- top requested URLs
+- top client IPs
+- average response time
+- average response time per URL
+
+It also checks for explainable patterns such as:
+
+- consecutive 5xx error bursts
+- timestamp-based traffic spikes
+- repeated failed login attempts from one IP
+- unusually high-volume IPs
+- slow endpoints
+
+The anomaly rules are explicit and are implemented in `src/common.cpp`.
+
+## 4. Parallelization strategy
+
+The OpenMP implementation divides the input records into contiguous ranges. Each thread creates a private `AnalysisResult`, processes its assigned records, and the partial results are merged after the parallel region.
+
+```text
+Input records
+       |
+       +-------------------------------+
+       |               |               |
+    Thread 0        Thread 1        Thread N-1
+       |               |               |
+   local result    local result    local result
+       +---------------+---------------+
+                       |
+                 merge results
+                       |
+                anomaly analysis
+                       |
+                   JSON output
+```
+
+This avoids a shared lock in the main record-processing loop.
+
+## 5. Correctness verification
+
+`scripts/verify.py` runs both implementations on the same input and compares the analytical output after removing runtime-only fields (`elapsed_ms`, `analysis_ms`, and `threads`).
+
+`scripts/benchmark.py` performs the same correctness check for every tested input size and every repeated measurement.
+
+## 6. Performance evaluation
+
+The project evaluates:
+
+- execution time of Sequential and OpenMP for increasing input sizes
+- speedup of OpenMP relative to Sequential
+- parallel efficiency for the selected OpenMP thread count
+- effect of increasing the number of OpenMP threads for a fixed large input
+- correctness of the parallel result
+
+The dashboard presents the experimental results using:
+
+1. Execution Time vs Input Size
+2. Speedup vs Input Size
+3. Parallel Efficiency vs Input Size
+4. OpenMP Execution Time vs Number of Threads
+5. Sequential vs OpenMP performance table
+6. OpenMP thread-scaling table
+7. Sequential vs OpenMP correctness table
+
+
+## 7. Build
+
+From the project root:
+
+```bash
+make
+```
+
+This creates only:
+
+```text
+bin/sequential
+bin/openmp
+```
+
+## 8. Generate test data
+
+```bash
+python3 tools/generate_logs.py --lines 10000 --output data/log_10k.csv --seed 42
+```
+
+The generator creates deterministic records and controlled patterns for testing the analysis functions.
+
+## 9. Run Sequential
+
+```bash
+./bin/sequential data/log_10k.csv results/sequential.json
+```
+
+## 10. Run OpenMP
+
+For four threads:
+
+```bash
+OMP_NUM_THREADS=4 ./bin/openmp data/log_10k.csv results/openmp.json
+```
+
+On Windows PowerShell:
+
+```powershell
+$env:OMP_NUM_THREADS=4
+.\bin\openmp.exe data\log_10k.csv results\openmp.json
+```
+
+## 11. Verify correctness
+
+```bash
+python3 scripts/verify.py data/log_10k.csv
+```
+
+Expected output:
+
+```text
+VERIFICATION PASSED: sequential and OpenMP results are identical.
+```
+
+## 12. Run the complete performance experiment
+
+```bash
+python3 scripts/benchmark.py --sizes 10000 50000 100000 250000 500000 --threads 4 --thread-counts 1 2 4 --thread-test-size 500000 --repeats 3
+```
+
+The benchmark:
+
+1. generates each required input size,
+2. runs Sequential,
+3. runs OpenMP,
+4. repeats measurements,
+5. uses the median core-analysis time,
+6. verifies correctness,
+7. calculates the performance metrics,
+8. measures OpenMP thread scaling,
+9. saves the data used by the dashboard.
+
+Generated result files:
+
+```text
+results/benchmark.csv
+results/thread_benchmark.csv
+```
+
+## 13. Start the dashboard
+
+```bash
+python3 dashboard/app.py
+```
+
+Open:
+
+```text
+http://127.0.0.1:8000
+```
+
+The dashboard is self-contained. No Flask installation or separate graphing program is required.
+
+## 14. Project files
 
 ```text
 log_analysis_project/
@@ -47,208 +201,19 @@ log_analysis_project/
 │   ├── common.hpp
 │   ├── common.cpp
 │   ├── sequential.cpp
-│   ├── openmp.cpp
-│   ├── openmp_naive.cpp
-│   └── hybrid_mpi_openmp.cpp
+│   └── openmp.cpp
 ├── tools/
 │   └── generate_logs.py
 ├── scripts/
-│   ├── verify.py
 │   ├── benchmark.py
-│   └── plot_results.py
+│   ├── smoke_test.py
+│   └── verify.py
 ├── dashboard/
-│   ├── app.py
-│   └── templates/
-│       └── index.html
+│   └── app.py
 ├── data/
 ├── results/
 ├── Makefile
-└── README.md
+├── README.md
+└── ARCHITECTURE.md
 ```
 
-## Requirements
-
-Recommended environment:
-
-- Ubuntu / WSL2
-- g++
-- OpenMP support
-- Open MPI (`mpic++`, `mpirun`)
-- Python 3
-- Flask
-- matplotlib
-
-Install on Ubuntu/WSL:
-
-```bash
-sudo apt update
-sudo apt install build-essential openmpi-bin libopenmpi-dev python3 python3-pip
-python3 -m pip install flask matplotlib
-```
-
-## Build
-
-```bash
-make
-```
-
-This creates:
-
-```text
-bin/sequential
-bin/openmp
-bin/openmp_naive
-bin/hybrid
-```
-
-## Generate test logs
-
-Small test file:
-
-```bash
-python3 tools/generate_logs.py --lines 10000 --output data/log_10k.csv --seed 42
-```
-
-Larger file:
-
-```bash
-python3 tools/generate_logs.py --lines 1000000 --output data/log_1m.csv --seed 42
-```
-
-The generator deliberately inserts deterministic anomaly patterns so they can be tested.
-
-## Run sequential
-
-```bash
-./bin/sequential data/log_10k.csv results/sequential.json
-```
-
-## Run OpenMP
-
-```bash
-OMP_NUM_THREADS=4 ./bin/openmp data/log_10k.csv results/openmp.json
-```
-
-## Run naive OpenMP
-
-```bash
-OMP_NUM_THREADS=4 ./bin/openmp_naive data/log_10k.csv results/openmp_naive.json
-```
-
-The naive version intentionally uses a shared critical section for aggregation. It is included for educational comparison and is expected to be slower on sufficiently large datasets.
-
-## Run hybrid MPI + OpenMP
-
-Example with 2 MPI processes and 2 OpenMP threads per process:
-
-```bash
-OMP_NUM_THREADS=2 mpirun --oversubscribe -np 2 ./bin/hybrid data/log_10k.csv results/hybrid.json
-```
-
-The exact MPI command may differ by MPI installation.
-
-## Verify correctness
-
-```bash
-python3 scripts/verify.py data/log_10k.csv
-```
-
-The verification script runs all three main implementations and compares their normalized JSON reports.
-
-## Benchmark
-
-```bash
-python3 scripts/benchmark.py
-```
-
-The benchmark uses several dataset sizes. Edit `scripts/benchmark.py` if your machine cannot handle the largest size.
-
-Results are written to:
-
-```text
-results/benchmark.csv
-```
-
-## Generate graphs
-
-```bash
-python3 scripts/plot_results.py
-```
-
-Graphs are saved under:
-
-```text
-results/plots/
-```
-
-## Start dashboard
-
-```bash
-python3 dashboard/app.py
-```
-
-Then open:
-
-```text
-http://127.0.0.1:5000
-```
-
-The dashboard reads the JSON result files from `results/`.
-
-## Important correctness idea
-
-The parallel programs should not be judged only by speed.
-
-The project requires:
-
-```text
-Sequential result
-       =
-OpenMP result
-       =
-MPI + OpenMP result
-```
-
-for the same input.
-
-The verification script also checks edge cases such as:
-
-- empty file
-- one-record file
-- normal data
-- repeated failed logins
-- error-heavy data
-
-## Speedup
-
-For a parallel implementation:
-
-```text
-Speedup = Sequential time / Parallel time
-```
-
-Example:
-
-```text
-Sequential = 10 seconds
-OpenMP = 4 seconds
-
-Speedup = 10 / 4 = 2.5x
-```
-
-Do not use example numbers in the report. Use measurements from your machine.
-
-## Dataset
-
-This project includes a deterministic synthetic-log generator. For the final submission, you can either:
-
-1. submit/link the generated dataset, or
-2. use a public server-log dataset and record its original source link.
-
-The generated dataset is useful for controlled experiments because the size and anomaly patterns can be reproduced using the same seed.
-
-## AI/prompt-log note
-
-Do not put your AI prompt log in this repository if your instructor says prompts must not be on GitHub.
-
-Keep the prompt log separately for submission.
